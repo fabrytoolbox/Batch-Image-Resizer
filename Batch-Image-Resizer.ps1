@@ -267,27 +267,22 @@ $btnStart.Add_Click({
         $ffProbeArgs = @("-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", $file.FullName)
         $resRaw = & $script:ffprobePath @ffProbeArgs 2>&1
         
-        if ($resRaw -match '(\d+)x(\d+)') {
+                if ($resRaw -match '(\d+)x(\d+)') {
             $w = [int]$matches[1]
             $h = [int]$matches[2]
             
-            # Se l'immagine ha ALTEZZA >= 1080 (es. 1920x1080 o 4K), la saltiamo.
-            # Se è più piccola (es. 720x720), la elaboriamo.
-            if ($h -ge 1080) {
-                Write-Log "Saltata (gia' >= 1080p): $($file.Name) (${w}x${h})" "WARN"
+            # Se l'immagine è già esattamente 1920x1080, la saltiamo (per non ricodificare inutilmente)
+            if ($w -eq 1920 -and $h -eq 1080) {
+                Write-Log "Saltata (gia' 1920x1080): $($file.Name)" "WARN"
                 $skipped++
             } else {
-                # Usiamo il filtro scale con force_original_aspect_ratio=decrease
-                # e pad per aggiungere le bande nere se l'immagine non è 16:9.
-                # Questo garantisce un output sempre 1920x1080.
-                # $vfFilter = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
+                # Ridimensiona TUTTE le altre immagini (4K, 720p, verticali, ecc.)
                 $vfFilter = "scale=1920:1080:flags=fast_bilinear"
-				
+                
                 $ffArgs = @("-y")
                 $cudaSuccess = $false
                 
                 if ($useCuda) {
-                    # Tentativo con CUDA (veloce, ma a volte fallisce su Windows)
                     $cudaFilter = "scale_cuda=1920:1080,hwdownload,format=nv12,format=yuv420p"
                     $cudaArgs = $ffArgs + @("-hwaccel", "cuda", "-i", $file.FullName, "-vf", $cudaFilter, "-q:v", "1", $outFile)
                     
@@ -302,8 +297,6 @@ $btnStart.Add_Click({
                 }
                 
                 if (-not $cudaSuccess) {
-                    # Fallback su CPU (o scelta principale se CUDA non è selezionato)
-                    # Usiamo il filtro originale che funzionava, ma con un algoritmo più veloce se possibile
                     $cpuFilterSafe = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
                     $cpuArgs = $ffArgs + @("-i", $file.FullName, "-vf", $cpuFilterSafe, "-q:v", "1", $outFile)
                     
@@ -317,23 +310,11 @@ $btnStart.Add_Click({
                 } else {
                     Write-Log "OK (GPU): $($file.Name) (${w}x${h} -> 1920x1080)" "OK"
                 }
-
-                try {
-                    & $script:ffmpegPath @ffArgs 2>&1 | Out-Null
-                    if ($LASTEXITCODE -eq 0) {
-                        Write-Log "OK: $($file.Name) (${w}x${h} -> 1920x1080)" "OK"
-                    } else {
-                        Write-Log "Errore FFmpeg su: $($file.Name)" "ERROR"
-                        $errors++
-                    }
-                } catch {
-                    Write-Log "Eccezione su: $($file.Name) - $($_.Exception.Message)" "ERROR"
-                    $errors++
-                }
             }
         } else {
             Write-Log "Impossibile leggere dimensioni di: $($file.Name)" "ERROR"
             $errors++
+     
         }
     }
 
