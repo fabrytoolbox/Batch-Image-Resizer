@@ -253,7 +253,7 @@ $btnStart.Add_Click({
     $errors = 0
     $skipped = 0
 
-    foreach ($file in $files) {
+        foreach ($file in $files) {
         if (-not $script:isWorking) { break }
         
         $current++
@@ -263,28 +263,34 @@ $btnStart.Add_Click({
 
         $outFile = Join-Path $dst $file.Name
 
-        # Controlla risoluzione (leggiamo sia W che H)
+        # Controlla risoluzione
         $ffProbeArgs = @("-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", $file.FullName)
         $resRaw = & $script:ffprobePath @ffProbeArgs 2>&1
         
-                if ($resRaw -match '(\d+)x(\d+)') {
+        if ($resRaw -match '(\d+)x(\d+)') {
             $w = [int]$matches[1]
             $h = [int]$matches[2]
             
-            # Se l'immagine è già esattamente 1920x1080, la saltiamo (per non ricodificare inutilmente)
+            # Se l'immagine è già esattamente 1920x1080, la saltiamo
             if ($w -eq 1920 -and $h -eq 1080) {
                 Write-Log "Saltata (gia' 1920x1080): $($file.Name)" "WARN"
                 $skipped++
             } else {
-                # Ridimensiona TUTTE le altre immagini (4K, 720p, verticali, ecc.)
-                $vfFilter = "scale=1920:1080:flags=fast_bilinear"
-                
-                $ffArgs = @("-y")
+                # Ridimensiona TUTTE le altre immagini
                 $cudaSuccess = $false
                 
                 if ($useCuda) {
-                    $cudaFilter = "scale_cuda=1920:1080,hwdownload,format=nv12,format=yuv420p"
-                    $cudaArgs = $ffArgs + @("-hwaccel", "cuda", "-i", $file.FullName, "-vf", $cudaFilter, "-q:v", "1", $outFile)
+                    # Catena CUDA corretta: carica su GPU, ridimensiona, scarica su CPU
+                    $cudaFilter = "hwupload,scale_cuda=1920:1080,hwdownload,format=yuv420p"
+                    $cudaArgs = @(
+                        "-y",
+                        "-init_hw_device", "cuda=foo:0",
+                        "-filter_hw_device", "foo",
+                        "-i", $file.FullName,
+                        "-vf", $cudaFilter,
+                        "-q:v", "1",
+                        $outFile
+                    )
                     
                     try {
                         & $script:ffmpegPath @cudaArgs 2>&1 | Out-Null
@@ -297,8 +303,9 @@ $btnStart.Add_Click({
                 }
                 
                 if (-not $cudaSuccess) {
+                    # Fallback CPU (o scelta principale)
                     $cpuFilterSafe = "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
-                    $cpuArgs = $ffArgs + @("-i", $file.FullName, "-vf", $cpuFilterSafe, "-q:v", "1", $outFile)
+                    $cpuArgs = @("-y", "-i", $file.FullName, "-vf", $cpuFilterSafe, "-q:v", "1", $outFile)
                     
                     & $script:ffmpegPath @cpuArgs 2>&1 | Out-Null
                     if ($LASTEXITCODE -eq 0) {
@@ -314,7 +321,6 @@ $btnStart.Add_Click({
         } else {
             Write-Log "Impossibile leggere dimensioni di: $($file.Name)" "ERROR"
             $errors++
-     
         }
     }
 
